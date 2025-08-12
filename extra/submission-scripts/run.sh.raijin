@@ -1,0 +1,15 @@
+#!/bin/bash -l
+#PBS -P bu54
+#PBS -q normal
+#PBS -l walltime=05:00:00
+#PBS -l mem=128GB
+#PBS -l ncpus=160
+#PBS -l wd
+
+# make the mpi libraries available
+module load intel-cc/2019.3.199 openmpi/4.0.0 hdf5/1.10.2p
+
+mkdir -p /short/bu54/simulations/off1r-1
+mkdir -p /short/bu54/simulations/off1r-1-logs
+
+mpirun ./pluto -i pluto.off1r.ini -x3jet

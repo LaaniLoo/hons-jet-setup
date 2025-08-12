@@ -1,0 +1,19 @@
+#!/bin/bash -l
+#PBS -lselect=50:ncpus=28:mpiprocs=28
+#PBS -lwalltime=48:00:00
+#PBS -N PLUTO-jet-simulation
+#PBS -o run.log
+#PBS -m abe
+#PBS -M patrick.yates@utas.edu.au
+
+#source /etc/profile.d/modules.sh
+# make the mpi libraries available
+module load intel/17.0.2
+# module load intel openmpi3 phdf5
+# load the hdf5 and libpng library paths
+export LD_LIBRARY_PATH=/scratch/pmyates/libraries/libpng/lib:/scratch/pmyates/libraries/hdf5/lib:/scratch/pmyates/libraries/szip/lib:${LD_LIBRARY_PATH}
+export LIBRARY_PATH=/scratch/pmyates/libraries/libpng/lib:/scratch/pmyates/libraries/hdf5/lib:/scratch/pmyates/libraries/szip/lib:${LIBRARY_PATH}
+cd $PBS_O_WORKDIR
+# echo $LD_LIBRARY_PATH
+ldd pluto
+mpiexec ./pluto -i 

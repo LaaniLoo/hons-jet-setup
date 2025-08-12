@@ -1,0 +1,62 @@
+{% if READTHEDOCS %}
+{# Add rst-badge after rst-versions for small badge style. #}
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+      <span class="fa fa-book"> Build the Docs</span>
+      v: {{ current_version }}
+      <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+      <dl>
+        <dt>{{ _('Versions') }}</dt>
+        {% for slug, url in versions %}
+          <dd><a href="{{ url }}">{{ slug }}</a></dd>
+        {% endfor %}
+      </dl>
+      <dl>
+        <dt>{{ _('Downloads') }}</dt>
+        {% for type, url in downloads %}
+          <dd><a href="{{ url }}">{{ type }}</a></dd>
+        {% endfor %}
+      </dl>
+      <dl>
+        {# Translators: The phrase "Build the Docs" is not translated #}
+        <dt>{{ _('On Build the Docs') }}</dt>
+          <dd>
+            <a href="//{{ PRODUCTION_DOMAIN }}/projects/{{ slug }}/?fromdocs={{ slug }}">{{ _('Project Home') }}</a>
+          </dd>
+          <dd>
+            <a href="//{{ PRODUCTION_DOMAIN }}/builds/{{ slug }}/?fromdocs={{ slug }}">{{ _('Builds') }}</a>
+          </dd>
+      </dl>
+    </div>
+  </div>
+{% endif %}
+
+{%- if current_version %}
+<div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    <span class="fa fa-book"> Other Versions</span>
+    v: {{ current_version.name }}
+    <span class="fa fa-caret-down"></span>
+  </span>
+  <div class="rst-other-versions">
+    {%- if versions.tags %}
+    <dl>
+      <dt>Tags</dt>
+      {%- for item in versions.tags %}
+      <dd><a href="{{ item.url }}">{{ item.name }}</a></dd>
+      {%- endfor %}
+    </dl>
+    {%- endif %}
+    {%- if versions.branches %}
+    <dl>
+      <dt>Branches</dt>
+      {%- for item in versions.branches %}
+      <dd><a href="{{ item.url }}">{{ item.name }}</a></dd>
+      {%- endfor %}
+    </dl>
+    {%- endif %}
+  </div>
+</div>
+{%- endif %}

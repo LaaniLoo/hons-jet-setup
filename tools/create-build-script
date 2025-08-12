@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+cat <<-END > build
+#!/usr/bin/env bash
+
+pluto_name=pluto
+pushd ./src
+[ ! -e pluto.ini ] && cp pluto.example.ini pluto.ini
+python \${PLUTO_DIR}/setup.py --auto-update && make clean && make -j8 && make clean && cp ./pluto ../\${pluto_name}
+make_exit_code=\$?
+popd
+exit "\${make_exit_code}"
+END
+
+chmod u+x build

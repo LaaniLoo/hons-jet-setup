@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+SRC_DIR="${DIR}/../src/"
+
+# rm build/* && cp ../../src/* build/ && pushd ./build && make -j && make clean && popd && rm -f pluto && cp build/pluto .
+rsync -avW --update ${SRC_DIR} ./src
+rsync_exit_code=$?
+
+pushd ${DIR} > /dev/null
+git_log=$(git describe --abbrev=4 --dirty --always --tags)
+popd > /dev/null
+
+echo ${git_log} > setup_version
+
+# create pluto.ini if one doesn't exist
+[ ! -e pluto.ini ] && cp src/pluto.example.ini pluto.ini
+
+exit "${rsync_exit_code}"

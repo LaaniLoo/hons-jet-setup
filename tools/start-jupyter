@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+
+import argparse
+import subprocess
+import json
+import random
+import time
+import sys
+import configparser
+from pathlib import Path
+import os
+from itertools import chain
+
+site_host_dict = {
+    "kunanyi": "kunanyi",
+    "gadi": "gadi",
+}
+
+module_base_dict = {
+    "kunanyi": ["intel", "impi", "hdf5", "sz"],
+    "gadi": [
+        "intel-compiler/2020.1.217",
+        "intel-mkl/2020.1.217",
+        "openmpi/4.0.2",
+        "hdf5/1.12.0p",
+        "cuda/10.2",
+    ],
+}
+
+
+def build_run_script(
+    *, site, project, queue, job_length, cpus, gpus, nodes, memory, notebook_dir
+):
+
+    project_resource_dict = {
+        "kunanyi": "",
+        "gadi": f"#PBS -P {project}",
+    }
+
+    queue_resource_dict = {
+        "kunanyi": f"#PBS -q {queue}",
+        "gadi": f"#PBS -q {queue}",
+    }
+
+    cpu_resource_dict = {
+        "kunanyi": f"#PBS -lselect={nodes}:ncpus={cpus}:mpiprocs={cpus}:mem={memory}gb",
+        "gadi": f"#PBS -l ncpus={cpus}",
+    }
+
+    gpu_resource_dict = {
+        "kunanyi": "",
+        "gadi": f"#PBS -l ngpus={gpus}",
+    }
+
+    memory_resource_dict = {
+        "kunanyi": "",
+        "gadi": f"#PBS -l mem={memory}GB",
+    }
+
+    storage_resource_dict = {
+        "kunanyi": "",
+        "gadi": "#PBS -l storage=scratch/um20+scratch/bu54",
+    }
+
+    if gpus is None:
+        gpu_resource_dict["gadi"] = ""
+
+    run_script = "\n".join(
+        [
+            "#!/bin/bash -l",
+            project_resource_dict[site],
+            queue_resource_dict[site],
+            cpu_resource_dict[site],
+            gpu_resource_dict[site],
+            memory_resource_dict[site],
+            storage_resource_dict[site],
+            f"#PBS -lwalltime={job_length}:00:00",
+            "#PBS -N jupyter",
+            "#PBS -j eo",
+            "#PBS -e notebook_log",
+            "conda activate analysis",
+            f"module load {' '.join(module_base_dict[site])}",
+            "port=$(shuf -n 1 -i 9000-9300)",
+            f"notebook_dir={notebook_dir}",
+            "export JUPYTER_RUNTIME_DIR=~/.local/share/jupyter/runtime",
+            "jupyter lab --ip=$(hostname -s) --port=${port} --notebook-dir=${notebook_dir} --no-browser",
+        ]
+    )
+    return run_script
+
+
+def submit_jupyterlab_job(*, site, run_script):
+    print(f"Submitting jupyterlab job on {site}")
+    try:
+        jlab_job = subprocess.run(
+            ["ssh", site_host_dict[site], "qsub", "-"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            input=run_script,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(e.stdout)
+        print(e.stderr)
+        raise e
+
+    return jlab_job.stdout.strip()
+
+
+def get_notebook_config_file(*, site):
+    job = subprocess.run(
+        [
+            "ssh",
+            site_host_dict[site],
+            # 'until find "$HOME/.local/share/jupyter/runtime/" -maxdepth 1 \\( -name "jpserver*.json" -o -name "nbserver*.json" \\) -print > /dev/null; do sleep 1; done; cat $(ls -rt ~/.local/share/jupyter/runtime/{jpserver*,nbserver*}.json | tail -n1)',
+            'until compgen -G "$HOME/.local/share/jupyter/runtime/*server*.json" > /dev/null; do sleep 1; done; cat $(ls -rt ~/.local/share/jupyter/runtime/*server*.json | tail -n1)',
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    notebook_config = json.loads(job.stdout)
+
+    return {
+        key: notebook_config[key]
+        for key in notebook_config.keys()
+        if key in ["port", "hostname", "url", "token"]
+    }
+
+
+def start_ssh_tunnel(*, site, lab_config, port):
+    print(f"Connecting to jupyterlab on {site}")
+    print(
+        f"Notebook is available at http://localhost:{port}/?token={lab_config['token']}"
+    )
+    ssh_tunnel = subprocess.Popen(
+        [
+            "ssh",
+            "-L",
+            f'{port}:{lab_config["hostname"]}:{lab_config["port"]}',
+            site_host_dict[site],
+            "-N",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    while True and ssh_tunnel.poll() is None:
+        try:
+            time.sleep(1)
+        except KeyboardInterrupt:
+            break
+    print("\nClosing ssh tunnel")
+    ssh_tunnel.kill()
+    ssh_tunnel.wait()
+    print("SSH tunnel closed")
+
+
+def delete_queue_jobs(*, site, job_ids):
+    for job_id in job_ids:
+        print(f"Deleting {job_id} from {site}")
+        delete_job = subprocess.run(
+            ["ssh", site_host_dict[site], "qdel", job_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+
+def get_running_notebook_jobs(*, site, queue=None):
+    if queue is None:
+        queue = ""
+    job = subprocess.run(
+        [
+            "ssh",
+            site_host_dict[site],
+            f'qstat -wau "$USER" {queue} | grep "jupyter" | cut -d " " -f1',
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    return [j.strip() for j in job.stdout.split()]
+
+
+def get_notebook_config_count(*, site):
+    job = subprocess.run(
+        [
+            "ssh",
+            site_host_dict[site],
+            "shopt -u nullglob; ls ~/.local/share/jupyter/runtime/*server*.json 2> /dev/null | wc -l",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return int(job.stdout)
+
+
+def check_for_existing_sessions(*, site):
+    config_count = get_notebook_config_count(site=site)
+    running_jobs = get_running_notebook_jobs(site=site)
+    if len(running_jobs) > 0:
+        print("The following jupyter job(s) are already running for your user:")
+        print("\n".join(running_jobs))
+        print(
+            f"\nPlease either connect to an existing session with start-jupyter -c, or kill all existing sessions on {site} before starting a new one."
+        )
+        print("Running start-jupyter -d will kill existing jupyter jobs")
+        return True
+    if config_count > 0:
+        print(
+            f"{config_count} existing session files found, but no notebook jobs are running."
+        )
+        print(
+            f"Try clearing all files in the ~/.local/share/jupyter/runtime directory on {site}"
+        )
+        return True
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "-n",
+        "--no-disconnect",
+        help="Leave jupyterlab job running when SSH session closes",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-c",
+        "--connect",
+        help="Connect to an existing jupyterlab job",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-d",
+        "--delete",
+        help="Delete any existing juptyerlab jobs",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--no-check", help="Skip checking for an existing job", action="store_true"
+    )
+
+    parser.add_argument(
+        "-p",
+        "--port",
+        help="Local port (default: random port between 9000-9400)",
+        type=int,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "-s",
+        "--site",
+        help="HPC site to run jupyterlab on (default: kunanyi)",
+        choices=["kunanyi", "gadi"],
+        default=argparse.SUPPRESS,
+    )
+
+    parser.add_argument(
+        "--job-length",
+        help="Number of hours to run jupyterlab job for (default: 24)",
+        type=int,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--nodes",
+        help="Number of nodes requested. Not applicable to Gadi (default: 1)",
+        type=int,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--cpus",
+        help="Number of cpus requested (default: 2)",
+        type=int,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--gpus",
+        help="Number of gpus requested. Not applicable to kunanyi (default: None)",
+        type=int,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--memory",
+        help="Memory requested, in gigabytes. (default: 128GB for kunaniy, 4GB*cpus for gadi)",
+        type=int,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--notebook-dir",
+        help="Notebook directory (default: $HOME)",
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--queue", help="Job queue (default: normal)", default=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--project",
+        help="Project code. Not applicable to kunanyi (default: um20)",
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--runtime-dir",
+        help="Jupyter runtime directory(default: $HOME/.local/share/jupyter/runtime)",
+        default=argparse.SUPPRESS,
+    )
+
+    parser.add_argument(
+        "--config",
+        help="Config to load. Saved configurations are loaded from the sj-config directory adjacent to the location of this script, and $XDG_CONFIG_HOME/start-jupyter",
+    )
+
+    args = parser.parse_args()
+    arg_dict = vars(args)
+    run_jupyter = not (args.connect or args.delete)
+    connect_to_jupyter = run_jupyter or args.connect
+
+    default_build_script_args = {
+        "site": "kunanyi",
+        "project": "um20",
+        "queue": "normal",
+        "job_length": 24,
+        "cpus": 2,
+        "gpus": None,
+        "nodes": 1,
+        "memory": 128,
+        "notebook_dir": "$HOME",
+        # "runtime_dir": "$HOME/.local/share/jupyter/runtime",
+    }
+
+    default_ssh_tunnel_args = {
+        "site": default_build_script_args["site"],
+        "port": random.randint(9000, 9400),
+    }
+
+    build_script_args = dict(default_build_script_args)
+    ssh_tunnel_args = dict(default_ssh_tunnel_args)
+
+    # load configuration file if necessary
+    if args.config is not None:
+        adj_conf_dir = Path(os.path.dirname(os.path.realpath(__file__))) / "sj-config"
+        xdg_conf_dir = (
+            Path(
+                os.environ.get(
+                    "XDG_CONFIG_HOME", default=f'{os.environ.get("HOME")}/.config/'
+                )
+            )
+            / "start-jupyter"
+        )
+        adj_files = adj_conf_dir.glob("**/*.conf")
+        xdg_files = xdg_conf_dir.glob("**/*.conf")
+
+        config = configparser.ConfigParser()
+        config.read(chain(adj_files, xdg_files))
+
+        if not config.has_section(args.config):
+            print(f"No config named {args.config} found")
+            return
+
+        cur_config = config[args.config]
+
+        for k in default_build_script_args.keys():
+            if k in cur_config:
+                build_script_args[k] = cur_config[k]
+
+        for k in default_ssh_tunnel_args.keys():
+            if k in cur_config:
+                ssh_tunnel_args[k] = cur_config[k]
+
+    # overwrite config/defaults with runtime arguments
+    for k in build_script_args.keys():
+        if k in arg_dict:
+            build_script_args[k] = arg_dict[k]
+    for k in ssh_tunnel_args.keys():
+        if k in arg_dict:
+            ssh_tunnel_args[k] = arg_dict[k]
+
+    notebook_site = build_script_args["site"]
+
+    if run_jupyter:
+        if not args.no_check and check_for_existing_sessions(site=notebook_site):
+            sys.exit()
+        run_script = build_run_script(**build_script_args)
+
+        job_id = submit_jupyterlab_job(site=notebook_site, run_script=run_script)
+        print("Waiting for job to start...")
+
+    if connect_to_jupyter:
+        if args.connect and len(get_running_notebook_jobs(site=notebook_site)) <= 0:
+            print(f"There are no jupyterlab jobs running on {notebook_site}")
+        else:
+            jconf = get_notebook_config_file(site=notebook_site)
+            # start_ssh_tunnel(site=notebook_site, lab_config=jconf, local_port=args.port)
+            start_ssh_tunnel(lab_config=jconf, **ssh_tunnel_args)
+
+        if run_jupyter and not args.no_disconnect:
+            delete_queue_jobs(site=notebook_site, job_ids=[job_id])
+
+    if args.delete:
+        running_jobs = get_running_notebook_jobs(site=notebook_site)
+        if len(running_jobs) > 0:
+            delete_queue_jobs(site=notebook_site, job_ids=running_jobs)
+        else:
+            print("There are no jupyterlab instances running")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,26 @@
+yaml-version: 3
+environment-properties:
+    concentration-profile: klypin-relaxed
+    cosmology: planck
+    halo-mass-exponent: 14.5
+    profile: makino
+    redshift: 0
+intermittent-properties:
+    outburst-count: 1
+jet-properties:
+    mach-number: 25.0
+    opening-angle-degrees-one: 15.0
+    opening-angle-degrees-two: 30.0
+    power-exponent: 37
+simulation-properties:
+    dimensions: 3
+    geometry: CARTESIAN
+    jet-active-time-myrs: 40
+    name: 3D-jet-injection-test
+    total-time-myrs: 40
+    tracer-count: 1
+    unique-jets: true
+    x1: [-182.2, 182.2]
+    x2: [-182.2, 182.2]
+    x3: [-182.2, 182.2]
+
